@@ -210,7 +210,11 @@ def main(argv):
         sys.stderr.write("The inserted file doesn't exist or have problems: " + str(err))
         sys.exit(2)
     root = tree.getroot()
-    fileName = root.get(list(filter(lambda x:x.find("NamespaceSchemaLocation"), root.attrib))[0], args["outputFile"])
+    if args["outputFile"]:
+        try:
+            fileName = root.get(list(filter(lambda x:x.find("NamespaceSchemaLocation"), root.attrib))[0], args["outputFile"])
+        except:
+            fileName = args["outputFile"]
 
     if args["inline"]:
         inspect(root, 1)
