@@ -6,22 +6,36 @@ import collections
 
 HELP_MESSAGE = """Help:
 Create .XSD grammar file for a given .XML file.
--i, --ifile             the input file. MUST be specified
--o, --ofile             the output file. Is overriden by the field in the XML 
-                        file if specified. Defaults to schema.xsd
--e, --xml-encoding      the encoding formato of the xsd file.
-                        Defaults at "utf-8"
--v, --xml-version       the version of the xsd file. Defaults at "1.0"
--s, --xsd-schema-url    the xsd schema url. 
-                        Defaults at http://www.w3.org/2001/XMLSchema
--c, --console           write on stdout instead than on the specified file.
---force-inline         forces the use of inlines instead of the creation of subtypes.
--h, --help              display this useful help
+
+-i, --ifile <file>            the input file. MUST be specified
+-o, --ofile <file>            the output file. Is overriden by the field 
+                              in the XML 
+                              file if specified. Defaults to schema.xsd
+-e, --xml-encoding <format>   the encoding formato of the xsd file.
+                              Defaults at "utf-8"
+-v, --xml-version <version>   the version of the xsd file. Defaults at "1.0"
+-s, --xsd-schema-url <url>    the xsd schema url. 
+                              Defaults at http://www.w3.org/2001/XMLSchema
+-c, --console                 write on stdout instead than on 
+                              the specified file.
+--force-ofile-name            Avoid the override of the output file name by
+                              the field on the XML.
+                              A file output must be present for this
+--force-xs-type <type>        force the use of a specific type for 
+                              the type attribute
+                              Defaults at "xs:string".
+                              BE CAREFUL no type check is done on this
+--force-inline                forces the use of inlines instead of the creation
+                              of subtypes. DO NOT USE AS IT CAN PRODUCE WRONG
+                              OUTPUTS, IT ALSO DOESN'T PRODUCE APPROPRIATE 
+                              ATTRIBUTES SUPPORT AND MIXED ATTRIBUTES
+-h, --help                    display this useful help
+-l                            Shows the license
 """
 LICENSE_MESSAGE="""
     #############################################################
     #                                                           #
-    #   This program is relased in the GNU GPL v3.0 licence     #
+    #   This program is relased in the GNU GPL v3.0 license     #
     #   you can modify/use this program as you wish. Please     #
     #   link the original distribution of this software. If     #
     #   you plan to redistribute your modified/copied copy      #
@@ -65,6 +79,7 @@ def inspect(root : ET.Element, level : int):
         printLevel(" type=\"xs:string\"/>", 0)
     
 def getArguments(argv : list) -> dict:
+    ofile = False
     result = {
         "inputFile" : None,
         "outputFile" : "schema.xsd",
@@ -72,13 +87,15 @@ def getArguments(argv : list) -> dict:
         "xmlVersion" : "1.0",
         "xsSchemaUrl" : "http://www.w3.org/2001/XMLSchema",
         "console" : False,
-        "inline" : False
+        "inline" : False,
+        "xsType" : "xs:string",
+        "fileOverride" : False
         }
 
     try:
-        opts, args = getopt.getopt(argv, "hi:o:e:v:s:cl", ["help", "ifile=", "ofile=", "xml-encoding=", "xml-version=", "xsd-schema-url", "console", "force-inline"])
+        opts, args = getopt.getopt(argv, "hi:o:e:v:s:cl", ["help", "ifile=", "ofile=", "xml-encoding=", "xml-version=", "xsd-schema-url=", "console", "force-inline", "force-xs-type=", "force-ofile-name"])
     except getopt.GetoptError:
-        print("Error in arguments")
+        print("Error in arguments\n")
         print(HELP_MESSAGE)
         sys.exit(1)
 
@@ -97,6 +114,7 @@ def getArguments(argv : list) -> dict:
         elif opt in ("-o", "--ofile"):
             if arg.lower().endswith(".xsd"):
                 result["outputFile"] = arg
+                ofile = True
             else:
                 sys.stderr.write("File must be a .xsd file")
         elif opt in ("-e", "--xml-encoding"):
@@ -109,7 +127,17 @@ def getArguments(argv : list) -> dict:
             result["console"] = True
         elif opt in ("--force-inline"):
             result["inline"] = True
+        elif opt in ("--force-xs-type"):
+            result["xsType"] = arg
+        elif opt in ("--force-ofile-name"):
+            result["fileOverride"] = True
 
+    if result["fileOverride"]:
+        if not ofile:
+            print(result["fileOverride"] , ofile)
+            print("Error, you must specify the output file (option -o) with the --force-ofile-name\n")
+            print(HELP_MESSAGE)
+            sys.exit(3)
     return result
 
 class XSDEl:
@@ -129,14 +157,16 @@ class XSDEl:
         return self.tag + " " + str(self.times) + " " + str(self.obb)
 
 class XSDCo:
-    def __init__(self, tag :str):
+    def __init__(self, tag : str, attrib : dict):
         self.tag = tag
         self.storage = collections.OrderedDict()
+        self.attrib = attrib
     def append(self, el : XSDEl):
         if el.tag not in self.storage:
             self.storage[el.tag] = el
         else:
             self.storage[el.tag].times += 1
+            self.storage[el.tag].el.attrib.update(el.el.attrib)
     def __eq__(self, other):
         return self.tag == other.tag
     def __hash__(self):
@@ -150,26 +180,29 @@ class XSDCo:
 
 def generateTree(root : ET.Element):
     result = list()
-    tmp = XSDCo(root.tag)
+    tmp = XSDCo(root.tag, root.attrib)
     for child in root:
         tmp.append(XSDEl(child))
         result += generateTree(child)
+
     result.append(tmp)
     return result
 
-def subType(root : ET.Element):
+def subType(root : ET.Element, xsType : str):
     tree = generateTree(root)
     complex = [el for el in tree if len(el.storage) > 0]
     newcomp = list()
+
     for part in complex:
         tmp = [el for el in complex if el.tag == part.tag]
         if tmp not in newcomp:
             newcomp.append(tmp)
+
     els = collections.OrderedDict()
     for elements in newcomp:
         for part in elements:
             if part.tag not in els:
-                els[part.tag] = XSDCo(part.tag)
+                els[part.tag] = XSDCo(part.tag, part.attrib)
                 for a in part.storage:
                     els[part.tag].append(part.storage[a])
             else:
@@ -182,26 +215,67 @@ def subType(root : ET.Element):
             elif field.times > len(elements):
                 field.mul = True
     complex = [t.tag for t in complex]
-    print(complex)
+
     for tag, datas in els.items():
         
         printLevel("<xs:complexType name=\"" + tag + "Type\">", 1)
         printLevel("<xs:sequence>", 2)
+
         for sub in datas.storage:
-            type = "xs:string" if sub not in complex else sub + "Type"
+
+            if sub not in complex:
+                if datas.storage[sub].el.text is not None:
+                    type = " type=\"" + xsType + "\""
+                else:
+                    type = ""
+            else:
+                type = " type=\"" + sub + "Type\""
+
             obb = " minOccurs=\"0\"" if not datas.storage[sub].obb else ""
             mul = ""
             if datas.storage[sub].mul:
                 mul = " maxOccurs=\"" + str(datas.storage[sub].times) + "\""
-            printLevel("<xs:element name=\"" + sub + "\" type=\"" + type + "\"" + obb + mul + "/>", 3)
+
+            if len(datas.storage[sub].el.attrib) > 0 and sub not in complex:
+                if datas.storage[sub].el.text is None:
+                    printLevel("<xs:element name=\"" + sub + "\"" + obb + mul +  ">", 3)
+                    printLevel("<xs:complexType>", 4)
+                    for at in datas.storage[sub].el.attrib:
+                        printLevel("<xs:attribute name=\"" + at + "\" type=\"" + xsType + "\"/>", 5)
+                    printLevel("</xs:complexType>", 4)
+                    printLevel("</xs:element>", 3)
+                else:
+                    printLevel("<xs:element name=\"" + sub + "\"" + obb + mul +  ">", 3)
+                    printLevel("<xs:complexType>", 4)
+                    printLevel("<xs:simpleContent>", 5)
+                    printLevel("<xs:extension base=\"" + xsType + "\">", 6)
+                    for at in datas.storage[sub].el.attrib:
+                        printLevel("<xs:attribute name=\"" + at + "\" type=\"" + xsType + "\"/>", 7)
+                    printLevel("</xs:extension>", 6)
+                    printLevel("</xs:simpleContent>", 5)
+                    printLevel("</xs:complexType>", 4)
+                    printLevel("</xs:element>", 3)
+            else:
+                printLevel("<xs:element name=\"" + sub + "\"" + type + obb + mul + "/>", 3)
+      
         printLevel("</xs:sequence>", 2)
+
+        for name in datas.attrib:
+            if not name.find("NamespaceSchemaLocation") > 0:
+                printLevel("<xs:attribute name=\"" + name + "\" type=\"" + xsType + "\"/>", 2)
+
         printLevel("</xs:complexType>", 1)
+
     printLevel("<xs:element name=\"" + root.tag + "\" type=\"" + root.tag + "Type\"/>", 1)
 
 def main(argv):
     global buf 
 
     args = getArguments(argv)
+    if args["inputFile"] is None:
+        print("Error, you must specify the input file (option -i)\n")
+        print(HELP_MESSAGE)
+        sys.exit(3)
     buf = StringBuffer("<?xml version=\"" + args["xmlVersion"] +"\" encoding=\"" + args["encoding"] + "\"?>\n")
     buf.append("<xs:schema xmlns:xs=\"" + args["xsSchemaUrl"] + "\">\n")
     try:
@@ -210,16 +284,19 @@ def main(argv):
         sys.stderr.write("The inserted file doesn't exist or have problems: " + str(err))
         sys.exit(2)
     root = tree.getroot()
-    if args["outputFile"]:
+    if args["fileOverride"]:
+        fileName = args["outputFile"]
+    else:
         try:
             fileName = root.get(list(filter(lambda x:x.find("NamespaceSchemaLocation"), root.attrib))[0], args["outputFile"])
         except:
             fileName = args["outputFile"]
 
     if args["inline"]:
+        print("WARNING THIS OPTION IS DEPRECATED AND IT'S SUGGESTED TO NOT USE BECAUSE OF IT'S INCORRECTED RESULTS\n(See the --help to know more)\n\n")
         inspect(root, 1)
     else:
-        subType(root)
+        subType(root, args["xsType"])
     buf.append("</xs:schema>\n")
 
     if args["console"]:
